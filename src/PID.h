@@ -17,15 +17,25 @@ public:
   double Ki;
   double Kd;
 
+  double last_cte; //cte in last measurement - use to calc d_error
+  double cum_cte_sq_err;
+
+  bool tuning;
+  bool reset;
+  int runnumber;
+  int iteration;
+
+
+
   /*
   * Constructor
   */
-  PID();
+  PID() :reset(false) {}
 
   /*
   * Destructor.
   */
-  virtual ~PID();
+  ~PID(){}
 
   /*
   * Initialize PID.
@@ -41,6 +51,6 @@ public:
   * Calculate the total PID error.
   */
   double TotalError();
-};
 
+};
 #endif /* PID_H */
