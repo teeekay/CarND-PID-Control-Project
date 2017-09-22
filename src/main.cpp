@@ -205,7 +205,7 @@ int main(int argc, char *argv[])
     steerpid.tuning = false;
 
     
-    init_steerval = 0.75;//0.6175;
+    init_steerval = 0.62;//0.75;//0.6175;
     max_steerval = init_steerval; //set once in case not tuning
 
     //init_throttle passed into program at start of main()
