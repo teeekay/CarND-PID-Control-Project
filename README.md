@@ -1,6 +1,9 @@
 # CarND-Controls-PID
 Self-Driving Car Engineer Nanodegree Program
 
+Please read [AnthonyKnightTerm2Assignment4Reflections.md](https://github.com/teeekay/CarND-PID-Control-Project/blob/master/AnthonyKnightTerm2Assignment4Reflections.md "reflections") to see observations regarding completion of this project.
+
+
 ---
 
 ## Dependencies
