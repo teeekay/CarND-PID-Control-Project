@@ -30,7 +30,7 @@ public:
   /*
   * Constructor
   */
-  PID() :reset(false) {}
+  PID() :reset(false), tuning(true), runnumber(0) {}
 
   /*
   * Destructor.
@@ -49,6 +49,7 @@ public:
 
   /*
   * Calculate the total PID error.
+  * use cumulative square of cross track errors
   */
   double TotalError();
 

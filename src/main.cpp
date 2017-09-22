@@ -6,14 +6,6 @@
 #include "debugging.h"
 #include <sysexits.h>
 
-//// from https://github.com/jdleesmiller/CarND-PID-Control-Project/
-//// Use this code when closing the socket after we detect that the car has
-//// crashed; this lets the server know that it was closed intentionally, rather
-//// than due to a network / simulator crashing problem.
-////const int CAR_CRASHED_CODE = 2000;
-////const int MAX_RUNTIME_CODE = 2001;
-
-
 // for convenience
 using json = nlohmann::json;
 using namespace std;
@@ -42,28 +34,52 @@ std::string hasData(std::string s) {
 
 //fit steer to value between 1.0 and -1.0
 
-double fix_steer(double steer) {
+double fix_steer(double steer, double max_steerval) {
   double new_steer = steer;
-  double max_steerval = 0.475;
   if (fabs(steer) > max_steerval) 
   {
     //new_steer = 1.0 * steer / (fabs(steer)); 
     new_steer = max_steerval * steer / (fabs(steer));
-    D(cout << "Fix Steer from " << steer << " to  " << new_steer << "." << endl;)
+    D(cout << "\rFix Steer from " << steer << " to  " << new_steer << ". \r" << flush;)
   }
   return(new_steer);
 }
 
-
-int main()
+int main(int argc, char *argv[])
 {
   uWS::Hub h;
 
+  double init_steerval;
+  double max_steerval;
+  double max_throttle;
   PID steerpid;
   PID speedpid;
+  double init_throttle = 0.3;
+
+  if (argc == 2)
+  {
+    cout << "The initial throttle argument supplied is " << argv[1] << endl;
+    double tmp_throttle = atof(argv[1]);
+    if (tmp_throttle > 0 and tmp_throttle < 1.0) {
+      init_throttle = tmp_throttle;
+    }
+  }
+  else {
+    cout << "To specify the throttle value to use at run time call " << endl << endl;
+    cout << argv[0] << " throttle_value" << endl << endl;
+    cout << "like this:" << endl << argv[0] << " 0.5" << endl;
+    cout << "throttle_value should be a float between 0.1 and 0.999." << endl;
+    cout << "Otherwise, " << init_throttle << " will be used by default." << endl;
+  }
+
+  cout << "Using " << init_throttle << " as throttle on this run." << endl << endl;
+
+
   // TODO: Initialize the pid variable - (in connection).
 
-  h.onMessage([&steerpid, &speedpid, &h](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) {
+  h.onMessage([&steerpid, &speedpid, &init_steerval, &max_steerval, &init_throttle, &max_throttle, &h]
+     (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode) 
+  {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -73,54 +89,80 @@ int main()
       if (s != "") {
         auto j = json::parse(s);
         std::string event = j[0].get<std::string>();
-        if (event == "telemetry") {
-          if (steerpid.tuning && !steerpid.reset) {
+        if (event == "telemetry") 
+        {
+          /**
+          * Put the car at the start of the track at the start of the run
+          **/
+          if (!steerpid.reset) {
             std::string reset_msg = "42[\"reset\", {}]";
             ws.send(reset_msg.data(), reset_msg.length(), uWS::OpCode::TEXT);
             steerpid.reset = true;
             return;
           }
 
-          ////// taken from https://github.com/jdleesmiller/CarND-PID-Control-Project/
-          ////// Make sure we've reset the simulator once on this run.
-          ////if (pid.tuning && !reset) {
-          ////  std::string reset_msg = "42[\"reset\", {}]";
-          ////  ws.send(reset_msg.data(), reset_msg.length(), uWS::OpCode::TEXT);
-          ////  reset = true;
-          ////  return;
-          ////}
-
-          // j[1] is the data JSON object
+           // j[1] is the data JSON object
           double cte = std::stod(j[1]["cte"].get<std::string>());
           double speed = std::stod(j[1]["speed"].get<std::string>());
           double angle = std::stod(j[1]["steering_angle"].get<std::string>());
           double steer_value;
 
+          // figure out if anything else useful coming in JSON message
+          D1(cout << "J:" << j << endl;)
+
+          //pass in cte to calculate cte error terms and steering response
           steerpid.UpdateError(cte);
+
+          //deal with first msg coming in before pid initialized for run
           steer_value = steerpid.TotalError();
-          steer_value = fix_steer(steer_value);
- 
-          /*
-          * TODO: Calcuate steering value here, remember the steering value is
-          * [-1, 1].
-          * NOTE: Feel free to play around with the throttle and speed. Maybe use
-          * another PID controller to control the speed!
-          */
+          
+          if (steerpid.tuning == true) {
+            // set up to run profiles of mean square error as values of max_steerval
+            // and max_throttle changed.
+            max_steerval = init_steerval;// +steerpid.runnumber * 0.05;
+            max_throttle = init_throttle;// +steerpid.runnumber *0.025;
+            //exit conditions when tuning steer
+            if (max_steerval > 0.8) {
+              exit(EX_OK);
+            }
+            if (max_throttle > 0.9) {
+              exit(EX_OK);
+            }
+          }
 
-          ////// If we've run all the way to the deadline, stop.
-          ////if (pid.tuning && pid.runtime > max_runtime) {
-          ////  std::cout << pid << std::endl;
-          ////  ws.close(MAX_RUNTIME_CODE);
-          ////  return;
-          ////}
-          // DEBUG
+          //keep steering values in the range of +/- max_steerval
+          steer_value = fix_steer(steer_value, max_steerval);
+          
+          if (steerpid.tuning && steerpid.iteration == 12000) 
+          {
+            // Output MSE for cte on last 12000 iterations
+            cout << "Iteration: " << steerpid.iteration << ", Error: " << steerpid.cum_cte_sq_err <<
+              " for settings (Kp, Ki, Kd) = (" << steerpid.Kp << ", " << steerpid.Ki <<
+              ", " << steerpid.Kd << ") max_steer = " << max_steerval << ", throttle = " << max_throttle << endl;
 
+            // send a reset to put the car at the start
+            std::string reset_msg = "42[\"reset\", {}]";
+            ws.send(reset_msg.data(), reset_msg.length(), uWS::OpCode::TEXT);
 
-          D(std::cout << "CTE: " << cte << " Steering Value: " << steer_value << std::endl;)
+            steerpid.reset = true;
+            return;
+          }
+
+          // put in routine just to crank up throttle every couple of laps to see 
+          // how fast it can go - 
+          if (!steerpid.tuning) {
+            if (steerpid.iteration % 12000 == 0) {
+              max_throttle = max_throttle + 0.01;
+              cout << endl << endl << "Boosting throttle to " << max_throttle << " after " << steerpid.iteration << " iterations - error = " << steerpid.cum_cte_sq_err << endl;
+              steerpid.cum_cte_sq_err = 0; 
+            }
+          }
+          
+          D1(std::cout << "CTE: " << cte << " Steering Value: " << steer_value << std::endl;)
 
           json msgJson;
           msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = 0.5;//originally 0.3
+          msgJson["throttle"] = max_throttle;
           auto msg = "42[\"steer\"," + msgJson.dump() + "]";
           D1(std::cout << msg << std::endl;)
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
@@ -149,100 +191,37 @@ int main()
     }
   });
 
-  h.onConnection([&steerpid, &speedpid, &h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
-    std::cout << "Connected!!!" << std::endl;
-    ////if (!pid.tuning) {
-    ////  std::cout << "Connected!!!" << std::endl;
-    ////}
-    ////pid.Init();
-    //.08,0,0.8 got halfway round the lake, but wobbling was excessive from bridge onwards - increase D
-    //.08,0,1.0 this is a good balance, but does not steer sharp enough around 2nd and 3rd corner - increase p and D
-    //.1, 0, 1.2 - made it around track, but was a bit wobbly - increase both p and d slightly (at max 35 mph)
-    // .13, 0, 1.4 - made around track, too wobbly
-    // .13, 0, 1.8 - pretty good, not quite enough steer response on sharper corners.  try boosting both p and d
-    //.15,0,2.5 - better, but needs a tiny bit more
-    // .17, 0, 2.8 - better, still too wobbly, and could be damped more
-    // .19, 0, 3.5 - better, could stil be damped more, and tweak reaction
-    // 0.2, 0, 4.0 - very good - try boosting damping
-    // 0.2, 0, 6.0 - turns a bit sharp, but enables fast reaction - try boosting velocity now to 0.5
-    // 0.2, 0, 6.0, 0.5 takes car to 55 now, and car does not react quite quickly enough on last set of curves, and is wobbly - try
-    // 0.25 0.0 8.0 0.5 good, still toches edge of road on last curves and sways
-    // 0.27 0.0 10.0 0.5 too wobbly
-    // 0.23 0.1 10.0 0.5 goes in circles!
-    // 0.23 0.001 10.0 0.5 wobbly touches edges
-    // 0.23 0.005 10.0 0.5 too much, causes sharp wobbles after 4th curve
-    // 0.23 0.003 10.0 0.5 too much, causes sharp wobbles after 4th curve
-    // 0.26 0.003 10.0 0.5 too much, causes sharp wobbles after 6th curve
-    // 0.26 0.002 10.0 0.5 crashes
-    // 0.26 0.002 6.0 0.5 crashes
-    // 0.26 0.0015 16.0 0.5 around track pretty well on very edge of paint at corner 5/6
-    // 0.26 0.0015 20.0 0.5 hits paint at corner 4
-    // 0.27 0.0015 20.0 0.5 hits paint at corner 4
-    // 0.27 0.00125 20.0 0.5 hits paint at 4 and 5
-    // 0.27 0.0011 20.0 0.5 > error 0.9-0.85
-    // 0.27 0.0011 20.0 0.6 
-    // 0.27 0.008 20.0 0.6 - crash on first corner - swerving violently
-    // 0.27 0.0 20.0 0.6 - makes it round, touching paint at 5/6 a bit too much swerve - top speed 59 at corner 1
-    // 0.27 0.0 20.0 0.7 - makes it roundto corner 6 nicely, but too much swerving therecrashing  - top speed 65 at corner 2
-    // 0.27 0.0 25.0 0.7 - better, generally makes it around, but can crash when weaving pattern started
-    // 0.26 0.0 25.0 0.7 - also adjusted max_steerval to 0.9 - nice - but wobbles get out of control
-    // 0.26 0.0 25.0 0.7 - also adjusted max_steerval to 0.8 - pretty good - still can crash
-    // 0.26 0.0 25.0 0.7 - also adjusted max_steerval to 0.7 - wobbliness accentuated
-    // 0.25 0.0 25.0 0.7 - also adjusted max_steerval to 0.7 - crashes on 4- 5 wobbles
-    // 0.25 0.0 15.0 0.8 - also adjusted max_steerval to 0.5 - crashes on wobbles
-    // 0.25 0.0 10.0 0.8 - also adjusted max_steerval to 0.5 - made it round 1 lap top speed 80mph crashed on wobbles
-    // 0.25 0.0 8.0 0.8 - also adjusted max_steerval to 0.5  - super wobble
-    // 0.25 0.0 12.0 0.8 - also adjusted max_steerval to 0.5  - super wobble
-    // 0.25 0.0 9.0 0.8 - also adjusted max_steerval to 0.5   - super wobble
-    // 0.25 0.0 11.0 0.8 - pretty good - big smash on curve 5
-    // 0.24 0.0 11.0 0.8 - too wobbly crash curve 1
-    // 0.24 0.0 11.0 0.8 adjusted max_steerval to 0.4 - wobbled between 4-5 crash at 5
-    // 0.24 0.0 11.0 0.8 adjusted max_steerval to 0.35
-    // 0.245 0.0 12.0 0.8 adjusted max_steerval to 0.35
-    // 0.245 0.0 10.5 0.8 adjusted max_steerval to 0.35 - smash at curve 2
-    // 0.245 0.0 10.5 0.8 adjusted max_steerval to 0.45
-    // 0.2475 0.0 10.5 0.8 adjusted max_steerval to 0.45 - wobbled on bridge - crash
-    // 0.2425 0.0 10.5 0.8 adjusted max_steerval to 0.45 - almost around track
-    // 0.24125 0.0 10.5 0.8 adjusted max_steerval to 0.45 - crash on curve 5
-    // 0.24375 0.0 10.5 0.8 adjusted max_steerval to 0.45 - crash on curve 5
-    // 0.243 0.0 10.5 0.8 adjusted max_steerval to 0.45 - crash on curve 5
-    // 0.242 0.0 10.5 0.8 adjusted max_steerval to 0.45 - crash on curve 5
-    // 0.2428 0.0 10.5 0.8 adjusted max_steerval to 0.45 - too wobbly crash on bridge
-    // 0.242 0.0 10.5 0.8 adjusted max_steerval to 0.45 
-    // 0.242 0.0 10.7 0.8 adjusted max_steerval to 0.45 - slightly better
-    // 0.242 0.0 10.8 0.8 adjusted max_steerval to 0.45 - better moderation, but bad result
-    // 0.242 0.0 10.8 0.75 adjusted max_steerval to 0.45 - better moderation, but bad result
-    // 0.242 0.0 10.75 0.75 adjusted max_steerval to 0.45 - better moderation, but bad result
-    // 0.242 0.0 10.9 0.75 adjusted max_steerval to 0.45
-    double Taup = 0.242;//was .07
+  h.onConnection([&steerpid, &speedpid, &init_steerval, &max_steerval, &max_throttle, &init_throttle , &h](uWS::WebSocket<uWS::SERVER> ws, uWS::HttpRequest req) {
+    std::cout << "Connected!!!" << flush;
+
+    // optimized PID parameters
+    double Taup = 0.244;
     double Taui = 0.0;
-    double Taud = 10.9;//was .7
+    double Taud = 8.91; // 8.91;
+
     steerpid.Init(Taup, Taui, Taud);
+    
+    //when tuning comment out next line
+    steerpid.tuning = false;
+
+    
+    init_steerval = 0.75;//0.6175;
+    max_steerval = init_steerval; //set once in case not tuning
+
+    //init_throttle passed into program at start of main()
+    max_throttle = init_throttle;
+    cout << endl << "Limiting maximum steer to (-" << init_steerval << "," << init_steerval << ")." << endl;
   });
 
   h.onDisconnection([&h](uWS::WebSocket<uWS::SERVER> ws, int code, char *message, size_t length) {
-    ////  h.onDisconnection([](uWS::WebSocket<uWS::SERVER> ws, int code, char *message, size_t length) {
-      ////switch (code) {
-      ////case CAR_CRASHED_CODE:
-      ////  // The car crashed; let the caller know.
-      ////  exit(1);
-      ////case MAX_RUNTIME_CODE:
-      ////   // The simulator ran until our deadline; that's a success.
-      ////  exit(EX_OK);
-      ////default:
-      ////  // If the simulator exits, we seem to get code 1006 or 0.
-      ////  std::cerr << "Disconnected: code=" << code << ":" <<
-      ////    std::string(message, length) << std::endl;
-      ////  exit(EX_UNAVAILABLE);
-      ////}
-    ws.close();
-    std::cout << "Disconnected" << std::endl;
+    std::cerr << "Disconnected: code=" << code << ":" << std::string(message, length) << std::endl;
+    exit(EX_OK);
   });
 
   int port = 4567;
   if (h.listen(port))
   {
-    std::cout << "Listening to port " << port << std::endl;
+    std::cout << "Listening to port " << port << endl;
   }
   else
   {
@@ -251,10 +230,3 @@ int main()
   }
   h.run();
 }
-
-////void reset_simulator(uWS::WebSocket<uWS::SERVER>& ws)
-////{
-////  // reset
-////  std::string msg("42[\"reset\", {}]");
-////  ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
-////}
